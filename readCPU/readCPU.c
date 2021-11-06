@@ -42,11 +42,11 @@ ULL** readCPUfun(int cpuCores){
 		fseek( fp, 0L, SEEK_SET );
 		
 		for(int i = 0; i < cpuCores; i++){
-			lineCPU[i] = malloc(7*sizeof(ULL));
+			lineCPU[i] = malloc(8*sizeof(ULL));
 			
-			fscanf(fp, "%*s %llu %llu %llu %llu %llu %llu %llu", 
+			fscanf(fp, "%*s %llu %llu %llu %llu %llu %llu %llu %llu", 
 				&lineCPU[i][0],&lineCPU[i][1],&lineCPU[i][2],&lineCPU[i][3],
-				&lineCPU[i][4],&lineCPU[i][5],&lineCPU[i][6]);
+				&lineCPU[i][4],&lineCPU[i][5],&lineCPU[i][6],&lineCPU[i][7]);
 			while('\n' != getc(fp)); // Wait for the next line
 			
 			/*
