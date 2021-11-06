@@ -3,9 +3,8 @@
 #include <string.h>
 #include "readCPU.h"
 
-ULL** readCPUfun(void){
-
-/* Dynamically allocated cores */
+int readCores(void){
+	/* Dynamically allocated cores */
 	FILE *fp;
 	
 	/* user, nice, system, idle, iwowait, irq, softirq, steal */
@@ -13,14 +12,30 @@ ULL** readCPUfun(void){
 	
 
 	if (fp != NULL) {
-	
 		/* Calculation of cores*/
 		int cpuCores = 0;		
 		while('c' == getc(fp)){
 			cpuCores++;
 			while('\n' != getc(fp)); // Wait for the next line
 		}
-		//printf("%d Cores\n", cpuCores);
+		fclose(fp);
+		return cpuCores;
+	}
+	else perror("Failed to read file /proc/stat");
+	
+	return -1;
+}
+
+
+ULL** readCPUfun(int cpuCores){
+
+	FILE *fp;
+	
+	/* user, nice, system, idle, iwowait, irq, softirq, steal */
+	fp = fopen("/proc/stat", "r");
+	
+
+	if (fp != NULL) {
 		
 		ULL **lineCPU = malloc(cpuCores*sizeof(ULL*));
 		
@@ -46,5 +61,7 @@ ULL** readCPUfun(void){
 	}
 	else perror("Failed to read file /proc/stat");
 	
+	ULL **noneList = malloc(sizeof(ULL*));
+	return noneList;
 	
 }

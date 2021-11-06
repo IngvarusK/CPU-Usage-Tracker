@@ -4,6 +4,7 @@
 
 #define ULL unsigned long long int
 
-ULL** readCPUfun(void);
+int readCores(void);
+ULL** readCPUfun(int);
 
 #endif // READCPU_H
