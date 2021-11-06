@@ -17,7 +17,8 @@ struct buffControl{
 
 struct buffControl readAnalyze;
 
-int cores;
+int cores = 0;
+unsigned long long int **y;
 
 volatile sig_atomic_t done = 0;
  
@@ -27,7 +28,7 @@ void term(int signum)
     printf("SIGTERM!");
 }
 
-unsigned long long **buffReadAnalyze[10];
+unsigned long long int **buffReadAnalyze[10];
 int countReadAnalyze = 0;
 
 void* readCPU(void* args) {
@@ -46,42 +47,35 @@ void* readCPU(void* args) {
 		countReadAnalyze++;
 		pthread_mutex_unlock(&readAnalyze.mutexBuffer);
 		sem_post(&readAnalyze.semFull);
-		if(done) break;
+		
+		//SIGTERM event
+		if(done) return NULL;
+		
     	}
 }
 
 void* analyzeCPU(void* args) {
+	while(!cores); // wait for core info
+	//float percCPU[cores];
 	
     	while (1) {
-		unsigned long long **y;
-
 		// Remove from the buffer
 		sem_wait(&readAnalyze.semFull);
 		pthread_mutex_lock(&readAnalyze.mutexBuffer);
 		
 		y = buffReadAnalyze[countReadAnalyze - 1];
+		/* user, nice, system, idle, iwowait, irq, softirq, steal */
+		printf("Using...%d\n", countReadAnalyze);
 		
 		for(int i = 0; i < cores; i++) free(y[i]);
-		free(y);
-		printf("Consuming... %d\n", countReadAnalyze);			
+		free(y);			
 		
 		countReadAnalyze--;
 		pthread_mutex_unlock(&readAnalyze.mutexBuffer);
-		sem_post(&readAnalyze.semEmpty);
-		
-		// Consume
-		
-		if(done){
-			while(countReadAnalyze){
-				y = buffReadAnalyze[countReadAnalyze - 1];
-				for(int i = 0; i < cores; i++) free(y[i]);
-				free(y);
-				countReadAnalyze--;
-			}
-			break;
-		}
-
-				
+		sem_post(&readAnalyze.semEmpty);		
+	
+		//SIGTERM event
+		if(done) return NULL;		
 		
     	}
 }
@@ -93,13 +87,11 @@ int main(int argc, char* argv[]){
     	action.sa_handler = term;
     	sigaction(SIGTERM, &action, NULL);
     
-	srand(time(NULL));
 	pthread_t threadID[2];
 	pthread_mutex_init(&readAnalyze.mutexBuffer, NULL);
 	sem_init(&readAnalyze.semEmpty, 0, 10);
 	sem_init(&readAnalyze.semFull, 0, 0);
-	int i;
-	for (i = 0; i < 2; i++) {
+	for (int i = 0; i < 2; i++) {
 		if ((i % 2) == 0) {
 			if (pthread_create(&threadID[i], NULL, &readCPU, NULL) != 0) {
 			perror("Failed to create thread");
@@ -110,11 +102,19 @@ int main(int argc, char* argv[]){
 			}
 		}
 	}
-	for (i = 0; i < 2; i++) {
+	for (int i = 0; i < 2; i++) {
 		if (pthread_join(threadID[i], NULL) != 0) {
 			perror("Failed to join thread");
 		}
 	}
+	
+	while(countReadAnalyze){
+		y = buffReadAnalyze[countReadAnalyze - 1];
+		for(int i = 0; i < cores; i++) free(y[i]);
+		free(y);
+		countReadAnalyze--;
+	}
+	
 	sem_destroy(&readAnalyze.semEmpty);
 	sem_destroy(&readAnalyze.semFull);
 	pthread_mutex_destroy(&readAnalyze.mutexBuffer);
@@ -124,7 +124,7 @@ int main(int argc, char* argv[]){
 		printf("CPU");
 		if(i) printf("%d ", i-1);
 		else printf(" ");
-		for(int j = 0; j < 7; j++){
+		for(int j = 0; j < 8; j++){
 			printf("%llu ", a[i][j]);
 		}
 		printf("\n");
