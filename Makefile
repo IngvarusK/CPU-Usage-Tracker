@@ -10,7 +10,7 @@ compile:
 	${CC} -c ${CFLAGS} main.c
 	${CC} -c ${CFLAGS} readCPU/readCPU.c
 	${CC} -c ${CFLAGS} analyzeCPU/analyzeCPU.c
-	${CC} -g -pthread ${CFLAGS} main.o readCPU.o analyzeCPU.o -o threads
+	${CC} -g -pthread ${CFLAGS} main.o readCPU.o analyzeCPU.o -o threads -lncurses
 	
 clean:
 	@echo "Cleaning up..."

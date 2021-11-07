@@ -6,6 +6,9 @@
 #include <time.h>
 #include <semaphore.h>
 #include <signal.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <ncurses.h> // sudo apt-get install libncurses5-dev
 #include "readCPU/readCPU.h"
 #include "analyzeCPU/analyzeCPU.h"
 
@@ -16,12 +19,15 @@ struct buffControl{
 	pthread_mutex_t mutexBuffer;
 };
 
-struct buffControl readAnalyze;
+struct buffControl readAnalyze, analyzeShow;
 
 int cores = 0;
 
 unsigned long long int **buffReadAnalyze[10];
 int countReadAnalyze = 0;
+
+float *buffAnalyzeShow[10];
+int countAnalyzeShow = 0;
 
 volatile sig_atomic_t done = 0;
 void term(int signum)
@@ -36,19 +42,22 @@ void* readCPU(void* args) {
 
 	while (1) {
 		// Add to the buffer
-		sleep(1);
+		usleep(200000);
 		sem_wait(&readAnalyze.semEmpty);
 		pthread_mutex_lock(&readAnalyze.mutexBuffer);
 		
 		buffReadAnalyze[countReadAnalyze] = readCPUfun(cores);
-		printf("Reading...%d\n", countReadAnalyze);
+		//printf("Reading...%d\n", countReadAnalyze);
 		
 		countReadAnalyze++;
 		pthread_mutex_unlock(&readAnalyze.mutexBuffer);
 		sem_post(&readAnalyze.semFull);
 		
 		//SIGTERM event
-		if(done) {printf("JESTEM1!\n"); return NULL;	}
+		if(done){
+			//printf("SIGTERM EXIT1!\n");
+			return NULL;
+		}
 		
     	}
 }
@@ -59,14 +68,11 @@ void* analyzeCPU(void* args) {
 	struct structData structDataVal[cores];
 	struct structData *structDataPoint = structDataVal;
 	
-	unsigned long long int **y;
-	
 	/*-----------------Receiving raw data-----------------*/
 	sem_wait(&readAnalyze.semFull);
 	pthread_mutex_lock(&readAnalyze.mutexBuffer);
 		
-	y = buffReadAnalyze[countReadAnalyze - 1];
-	getValues(&cores, structDataPoint, y);
+	getValues(&cores, structDataPoint, buffReadAnalyze[countReadAnalyze - 1]);
 	changeToPrev(&cores, structDataPoint);
 	
 	countReadAnalyze--;
@@ -79,28 +85,84 @@ void* analyzeCPU(void* args) {
 		sem_wait(&readAnalyze.semFull);
 		pthread_mutex_lock(&readAnalyze.mutexBuffer);
 		
-		y = buffReadAnalyze[countReadAnalyze - 1];
-		getValues(&cores, structDataPoint, y);						
+		getValues(&cores, structDataPoint, buffReadAnalyze[countReadAnalyze - 1]);	
+		
+			/*--------------------Calucations--------------------*/
+			sem_wait(&analyzeShow.semEmpty);
+			pthread_mutex_lock(&analyzeShow.mutexBuffer);
+			
+			buffAnalyzeShow[countAnalyzeShow] = getCpuPerc(&cores, structDataPoint);
+			changeToPrev(&cores, structDataPoint);
+			//printf("Sending to Show...%d\n", countAnalyzeShow);
+			
+			countAnalyzeShow++;
+			pthread_mutex_unlock(&analyzeShow.mutexBuffer);
+			sem_post(&analyzeShow.semFull);
+			/*----------------------------------------------------*/					
 		
 		countReadAnalyze--;
 		pthread_mutex_unlock(&readAnalyze.mutexBuffer);
 		sem_post(&readAnalyze.semEmpty);
-		/*----------------------------------------------------*/
+		/*----------------------------------------------------*/		
 		
-		if(done) {printf("JESTEM2!\n"); return NULL;	}
-	
-		/*--------------------Calucations--------------------*/
-		float* a = getCpuPerc(&cores, structDataPoint);
-		for(int i = 0; i < cores; i++) printf("%.2f ", a[i]);
-		changeToPrev(&cores, structDataPoint);
-		free(a);
-		/*----------------------------------------------------*/
-		printf("\n");
-	
 		//SIGTERM event
-		if(done) {printf("JESTEM3!\n"); return NULL;	}	
+		if(done){
+			//printf("SIGTERM EXIT2!\n");
+			return NULL;
+		}	
 		
     	}
+}
+
+void* showCPU(void* args) {
+	while(!cores) usleep(1000); // wait for core info
+	
+	struct winsize size;
+	initscr();			/* Start curses mode 		  */
+	printw("Hello World !!!");	/* Print Hello World	*/
+	
+	int width = 0;
+	int width_load;
+	
+	while(1){
+		
+		sem_wait(&analyzeShow.semFull);
+		pthread_mutex_lock(&analyzeShow.mutexBuffer);
+		
+		//printf("Showing...%d\n", countAnalyzeShow-1);
+		
+		refresh();			/* Print it on to the real screen */
+		ioctl( 0, TIOCGWINSZ, (char *) &size );
+		width = size.ws_col - 11;
+		//printw( "Rows: %u\nCols: %u\n", size.ws_row, size.ws_col );
+		move(0,0);
+		printw(" CPU Total Load: %.2f%\n\n", buffAnalyzeShow[countAnalyzeShow - 1][0]);
+		for(int i = 1; i < cores; i++){
+			printw(" %d[", i-1);
+			width_load = (int)((buffAnalyzeShow[countAnalyzeShow - 1][i] / 100)*width);
+			for(int i = 0; i < width_load; i++) printw("|");
+			for(int i = 0; i < (width-width_load); i++) printw(" ");
+			printw("] ");
+			if(buffAnalyzeShow[countAnalyzeShow - 1][i] < 10) printw(" ");
+			printw("%.1f% \n", buffAnalyzeShow[countAnalyzeShow - 1][i]);
+		}
+		//printw("%d\n",width);
+		free(buffAnalyzeShow[countAnalyzeShow - 1]);
+		
+		countAnalyzeShow--;
+		pthread_mutex_unlock(&analyzeShow.mutexBuffer);
+		sem_post(&analyzeShow.semEmpty);
+	
+		
+	
+		//SIGTERM event
+		if(done){
+			endwin();
+			//printf("SIGTERM EXIT3!\n");
+			return NULL;
+		}
+	}
+	
 }
 
 
@@ -110,40 +172,55 @@ int main(int argc, char* argv[]){
     	action.sa_handler = term;
     	sigaction(SIGTERM, &action, NULL);
     
-	pthread_t threadID[2];
+	pthread_t threadID[3];
 	
 	pthread_mutex_init(&readAnalyze.mutexBuffer, NULL);
 	sem_init(&readAnalyze.semEmpty, 0, 10);
 	sem_init(&readAnalyze.semFull, 0, 0);
 	
-	for (int i = 0; i < 2; i++) {
-		if ((i % 2) == 0) {
+	pthread_mutex_init(&analyzeShow.mutexBuffer, NULL);
+	sem_init(&analyzeShow.semEmpty, 0, 10);
+	sem_init(&analyzeShow.semFull, 0, 0);
+	
+	for (int i = 0; i < 3; i++) {
+		if ((i % 3) == 0) {
 			if (pthread_create(&threadID[i], NULL, &readCPU, NULL) != 0) {
 			perror("Failed to create thread");
 			}
-		} else if ((i % 2) == 1) {
+		} else if ((i % 3) == 1) {
 			if (pthread_create(&threadID[i], NULL, &analyzeCPU, NULL) != 0) {
+			perror("Failed to create thread");
+			}
+		} else if ((i % 3) == 2) {
+			if (pthread_create(&threadID[i], NULL, &showCPU, NULL) != 0) {
 			perror("Failed to create thread");
 			}
 		}
 	}
-	for (int i = 0; i < 2; i++) {
+	for (int i = 0; i < 3; i++) {
 		if (pthread_join(threadID[i], NULL) != 0) {
 			perror("Failed to join thread");
 		}
 	}
 	
-	unsigned long long int **pointFree1;
 	while(countReadAnalyze){
-		pointFree1 = buffReadAnalyze[countReadAnalyze - 1];
-		for(int i = 0; i < cores; i++) free(pointFree1[i]);
-		free(pointFree1);
+		for(int i = 0; i < cores; i++) free(buffReadAnalyze[countReadAnalyze - 1][i]);
+		free(buffReadAnalyze[countReadAnalyze - 1]);
 		countReadAnalyze--;
+	}
+	
+	while(countAnalyzeShow){
+		free(buffAnalyzeShow[countAnalyzeShow - 1]);
+		countAnalyzeShow--;
 	}
 	
 	sem_destroy(&readAnalyze.semEmpty);
 	sem_destroy(&readAnalyze.semFull);
 	pthread_mutex_destroy(&readAnalyze.mutexBuffer);
+	
+	sem_destroy(&analyzeShow.semEmpty);
+	sem_destroy(&analyzeShow.semFull);
+	pthread_mutex_destroy(&analyzeShow.mutexBuffer);
 	
 	return 0;
 	
