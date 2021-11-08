@@ -13,6 +13,8 @@
 #include "readCPU/readCPU.h"
 #include "analyzeCPU/analyzeCPU.h"
 
+#define us_wait 1000000 // sampling delay in us (micro seconds)
+
 // Struct for dealing with producer-consumer problem
 struct buffControl{
 	sem_t semEmpty;
@@ -24,12 +26,15 @@ struct buffControl readAnalyze, analyzeShow;
 
 int cores = 0;
 
+// Read-Analyze communication
 unsigned long long int **buffReadAnalyze[10];
 int countReadAnalyze = 0;
 
+// Analyze-Show communication
 float *buffAnalyzeShow[10];
 int countAnalyzeShow = 0;
 
+// Sigterm signal handler
 volatile sig_atomic_t done = 0;
 void term(int signum)
 {
@@ -37,6 +42,7 @@ void term(int signum)
     printf("SIGTERM!\n");
 }
 
+// For Watchdog purpose
 time_t seconds[4];
 
 void* readCPU(void* args) {
@@ -46,7 +52,7 @@ void* readCPU(void* args) {
 	while (1) {
 		seconds[0] = time(NULL);
 		// Add to the buffer
-		usleep(500000);
+		usleep(us_wait);
 		sem_wait(&readAnalyze.semEmpty);
 		pthread_mutex_lock(&readAnalyze.mutexBuffer);
 		
@@ -69,6 +75,7 @@ void* readCPU(void* args) {
 void* analyzeCPU(void* args) {
 	while(!cores) usleep(1000); // wait for core info
 	
+	// Keeping 8 variables per core from /proc/sys
 	struct structData structDataVal[cores];
 	struct structData *structDataPoint = structDataVal;
 	
@@ -120,12 +127,14 @@ void* analyzeCPU(void* args) {
 }
 
 void* showCPU(void* args) {
+
 	while(!cores) usleep(1000); // wait for core info
 	
+	// ncurses.h window terminal
 	struct winsize size;
 	
-	WINDOW * mainwin = initscr();	/* Start curses mode 		  */
-	curs_set(0);
+	WINDOW * mainwin = initscr();		/* Start curses mode 	*/
+	printw("Cpu Tracker loading...");	/* Print Hello World	*/
 	
 	int width = 0;
 	int width_load;	
@@ -166,6 +175,7 @@ void* showCPU(void* args) {
 	
 		//SIGTERM event
 		if(done){
+			// Close the window
 			delwin(mainwin);
 			endwin();
 			refresh();
@@ -177,17 +187,26 @@ void* showCPU(void* args) {
 }
 
 void* watchDog(void* args) {
+
+	/* Program saves the last time the begin of each infinite loop is procceded
+		then it's compared to stable watchdog thread function		*/
 	while(1){
-		sleep(1);
+		sleep(2);
 		seconds[4] = time(NULL);
 		if((seconds[4]-seconds[0]) >= 2) perror("Program stopped working properly readCPU() fault");
 		if((seconds[4]-seconds[1]) >= 2) perror("Program stopped working properly analyzeCPU() fault");
 		if((seconds[4]-seconds[2]) >= 2) perror("Program stopped working properly showCPU() fault");
+		if(done){
+			//printf("SIGTERM EXIT1!\n");
+			return NULL;
+		}
 	}
 }
 
 
 int main(int argc, char* argv[]){
+
+	//Sigterm handler
 	struct sigaction action;
     	memset(&action, 0, sizeof(struct sigaction));
     	action.sa_handler = term;
@@ -195,10 +214,11 @@ int main(int argc, char* argv[]){
     
 	pthread_t threadID[4];
 	
+	// Read-Analyze communication
 	pthread_mutex_init(&readAnalyze.mutexBuffer, NULL);
 	sem_init(&readAnalyze.semEmpty, 0, 10);
 	sem_init(&readAnalyze.semFull, 0, 0);
-	
+	// Analyze-Show communication
 	pthread_mutex_init(&analyzeShow.mutexBuffer, NULL);
 	sem_init(&analyzeShow.semEmpty, 0, 10);
 	sem_init(&analyzeShow.semFull, 0, 0);
@@ -216,7 +236,7 @@ int main(int argc, char* argv[]){
 			if (pthread_create(&threadID[i], NULL, &showCPU, NULL) != 0) {
 			perror("Failed to create thread");
 			}
-		} else if ((i % 4) == 2) {
+		} else if ((i % 4) == 3) {
 			if (pthread_create(&threadID[i], NULL, &watchDog, NULL) != 0) {
 			perror("Failed to create thread");
 			}
@@ -228,12 +248,13 @@ int main(int argc, char* argv[]){
 		}
 	}
 	
+	// Delete all variables made by malloc() (** unsigned long long int and *long long int and)
 	while(countReadAnalyze){
 		for(int i = 0; i < cores; i++) free(buffReadAnalyze[countReadAnalyze - 1][i]);
 		free(buffReadAnalyze[countReadAnalyze - 1]);
 		countReadAnalyze--;
 	}
-	
+	// Delete all variables made by malloc() (* float)
 	while(countAnalyzeShow){
 		free(buffAnalyzeShow[countAnalyzeShow - 1]);
 		countAnalyzeShow--;
