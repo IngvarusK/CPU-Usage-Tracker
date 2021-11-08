@@ -9,6 +9,7 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <ncurses.h> // sudo apt-get install libncurses5-dev
+#include <time.h>
 #include "readCPU/readCPU.h"
 #include "analyzeCPU/analyzeCPU.h"
 
@@ -36,13 +37,16 @@ void term(int signum)
     printf("SIGTERM!\n");
 }
 
+time_t seconds[4];
+
 void* readCPU(void* args) {
 
 	cores = readCores();
 
 	while (1) {
+		seconds[0] = time(NULL);
 		// Add to the buffer
-		usleep(200000);
+		usleep(500000);
 		sem_wait(&readAnalyze.semEmpty);
 		pthread_mutex_lock(&readAnalyze.mutexBuffer);
 		
@@ -81,6 +85,7 @@ void* analyzeCPU(void* args) {
 	/*----------------------------------------------------*/	
 	
     	while (1) {
+    		seconds[1] = time(NULL);
 		/*-----------------Receiving raw data-----------------*/
 		sem_wait(&readAnalyze.semFull);
 		pthread_mutex_lock(&readAnalyze.mutexBuffer);
@@ -118,24 +123,28 @@ void* showCPU(void* args) {
 	while(!cores) usleep(1000); // wait for core info
 	
 	struct winsize size;
-	initscr();			/* Start curses mode 		  */
-	printw("Hello World !!!");	/* Print Hello World	*/
+	
+	WINDOW * mainwin = initscr();	/* Start curses mode 		  */
+	curs_set(0);
 	
 	int width = 0;
-	int width_load;
+	int width_load;	
 	
 	while(1){
-		
+		seconds[2] = time(NULL);
 		sem_wait(&analyzeShow.semFull);
 		pthread_mutex_lock(&analyzeShow.mutexBuffer);
 		
 		//printf("Showing...%d\n", countAnalyzeShow-1);
 		
 		refresh();			/* Print it on to the real screen */
+		clear();
 		ioctl( 0, TIOCGWINSZ, (char *) &size );
+		move(0,(int)((size.ws_col-21)/2));
+		printw("CPU Usage Tracker IgorK");	/* Print Hello World	*/
 		width = size.ws_col - 11;
 		//printw( "Rows: %u\nCols: %u\n", size.ws_row, size.ws_col );
-		move(0,0);
+		move(2,0);
 		printw(" CPU Total Load: %.2f%\n\n", buffAnalyzeShow[countAnalyzeShow - 1][0]);
 		for(int i = 1; i < cores; i++){
 			printw(" %d[", i-1);
@@ -148,7 +157,7 @@ void* showCPU(void* args) {
 		}
 		//printw("%d\n",width);
 		free(buffAnalyzeShow[countAnalyzeShow - 1]);
-		
+
 		countAnalyzeShow--;
 		pthread_mutex_unlock(&analyzeShow.mutexBuffer);
 		sem_post(&analyzeShow.semEmpty);
@@ -157,12 +166,24 @@ void* showCPU(void* args) {
 	
 		//SIGTERM event
 		if(done){
+			delwin(mainwin);
 			endwin();
+			refresh();
 			//printf("SIGTERM EXIT3!\n");
 			return NULL;
 		}
 	}
 	
+}
+
+void* watchDog(void* args) {
+	while(1){
+		sleep(1);
+		seconds[4] = time(NULL);
+		if((seconds[4]-seconds[0]) >= 2) perror("Program stopped working properly readCPU() fault");
+		if((seconds[4]-seconds[1]) >= 2) perror("Program stopped working properly analyzeCPU() fault");
+		if((seconds[4]-seconds[2]) >= 2) perror("Program stopped working properly showCPU() fault");
+	}
 }
 
 
@@ -172,7 +193,7 @@ int main(int argc, char* argv[]){
     	action.sa_handler = term;
     	sigaction(SIGTERM, &action, NULL);
     
-	pthread_t threadID[3];
+	pthread_t threadID[4];
 	
 	pthread_mutex_init(&readAnalyze.mutexBuffer, NULL);
 	sem_init(&readAnalyze.semEmpty, 0, 10);
@@ -182,22 +203,26 @@ int main(int argc, char* argv[]){
 	sem_init(&analyzeShow.semEmpty, 0, 10);
 	sem_init(&analyzeShow.semFull, 0, 0);
 	
-	for (int i = 0; i < 3; i++) {
-		if ((i % 3) == 0) {
+	for (int i = 0; i < 4; i++) {
+		if ((i % 4) == 0) {
 			if (pthread_create(&threadID[i], NULL, &readCPU, NULL) != 0) {
 			perror("Failed to create thread");
 			}
-		} else if ((i % 3) == 1) {
+		} else if ((i % 4) == 1) {
 			if (pthread_create(&threadID[i], NULL, &analyzeCPU, NULL) != 0) {
 			perror("Failed to create thread");
 			}
-		} else if ((i % 3) == 2) {
+		} else if ((i % 4) == 2) {
 			if (pthread_create(&threadID[i], NULL, &showCPU, NULL) != 0) {
+			perror("Failed to create thread");
+			}
+		} else if ((i % 4) == 2) {
+			if (pthread_create(&threadID[i], NULL, &watchDog, NULL) != 0) {
 			perror("Failed to create thread");
 			}
 		}
 	}
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 4; i++) {
 		if (pthread_join(threadID[i], NULL) != 0) {
 			perror("Failed to join thread");
 		}
